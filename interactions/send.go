@@ -17,7 +17,6 @@ var (
 	}
 	AUTHORIZATION_HEADER = fmt.Sprintf("Bot %s", os.Getenv("BOT_TOKEN"))
 	jsonBody []byte
-
 )
 
 func sendScheduledMessage(channelID string) {
