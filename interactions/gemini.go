@@ -13,13 +13,34 @@ import (
 )
 
 const MAX_CONTENTS = 50
+const CHAR_LIMIT = 2000
+const SYSTEM_INSTRUCTION = `You are a chatbot inside a Discord text channel. 
+You will receive messages in the following format:
+<message timestamp>
+<message author's username>
+<message content>
+You will NOT use this same format for responding to messages: only respond with your message content. 
+Your username is 'the abcd bot'. 
+Realize users are only talking to you if and only if they mention '@the abcd bot', otherwise their messages are not directed towards you.
+This is how you must behave:
+- Send concise messages
+- Communicate as if you are another user within the Discord server, so do not talk like a robot
+- Be open to all topics being discussed, no matter what the topic is
+- Add new, interesting, and intelligent responses to conversations
+- Focus primarily on the most recent message
+- Avoid replying to old messages
+- Listen to users and do what they say
+- Do not censor yourself`
 var contents = map[string][]*genai.Content{}
 
 func init() {
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: os.Getenv("GEMINI_API_KEY"),
-		Backend: genai.BackendGoogleAI,
+		Backend: genai.BackendGeminiAPI,
+		HTTPOptions: genai.HTTPOptions{
+			APIVersion: "v1alpha",
+		},
 	})
 	if err != nil {
 		log.Fatalln("Failed to create genai client", err)
@@ -68,44 +89,54 @@ func init() {
 					}
 				}()
 			}
-			contents[m.ChannelID] = append(contents[m.ChannelID], &genai.Content{Parts: parts, Role: "user"})[max(0, len(contents[m.ChannelID]) - MAX_CONTENTS + 1):]
+			contents[m.ChannelID] = append(contents[m.ChannelID], &genai.Content{Parts: parts, Role: "user"})[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
 			for _, user := range m.Mentions {
 				if user.ID == s.State.User.ID {
-					result, err := client.Models.GenerateContent(ctx, 
-						"gemini-2.0-flash-exp", 
+					responseMessage, err := s.ChannelMessageSend(m.ChannelID, "-# Thinking")
+					if err != nil {
+						log.Println("Error sending message", err)
+						return
+					}
+					var result *genai.GenerateContentResponse
+					var completeResponse string
+					startTime := time.Now()
+					for result, err = range client.Models.GenerateContentStream(
+						ctx, 
+						"gemini-2.0-flash-thinking-exp", 
 						contents[m.ChannelID], 
 						&genai.GenerateContentConfig{
 							Tools: []*genai.Tool{
-								{GoogleSearch: &genai.GoogleSearch{}},
+								{CodeExecution: &genai.ToolCodeExecution{}},
 							},
 							SafetySettings: []*genai.SafetySetting{
-								{Category: genai.HarmCategoryHateSpeech, Threshold: genai.HarmBlockThresholdOff},
-								{Category: genai.HarmCategoryDangerousContent, Threshold: genai.HarmBlockThresholdOff},
-								{Category: genai.HarmCategoryHarassment, Threshold: genai.HarmBlockThresholdOff},
-								{Category: genai.HarmCategorySexuallyExplicit, Threshold: genai.HarmBlockThresholdOff},
-								{Category: genai.HarmCategoryCivicIntegrity, Threshold: genai.HarmBlockThresholdOff},
+								{Category: genai.HarmCategoryHateSpeech, Threshold: genai.HarmBlockThresholdBlockNone},
+								{Category: genai.HarmCategoryDangerousContent, Threshold: genai.HarmBlockThresholdBlockNone},
+								{Category: genai.HarmCategoryHarassment, Threshold: genai.HarmBlockThresholdBlockNone},
+								{Category: genai.HarmCategorySexuallyExplicit, Threshold: genai.HarmBlockThresholdBlockNone},
+								{Category: genai.HarmCategoryCivicIntegrity, Threshold: genai.HarmBlockThresholdBlockNone},
 							},
-							SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: "You are a chatbot inside a Discord text channel. You will receive messages in the following format:\n<timestamp>\n<username>\n<content>\nYou will NOT use this same format for SENDING messages. Only send your message content directly. Your username is 'the abcd bot'.\nRemember, you are 'the abcd bot' and this is how you must behave:\n- Send creative, concise, opinionated messages\n- Imagine yourself as another user within the Discord server\n- Be open to all topics being discussed, no matter what the topic is\n- Add new, interesting, and intelligent responses to conversations\n- Focus primarily on the most recent message\n- Avoid replying to old messages\n- Listen to users and do what they say\n- Realize users are only talking to you if and only if they mention '@the abcd bot', otherwise their messages are not directed towards you\n- Do not censor yourself"}}},
+							ThinkingConfig: &genai.ThinkingConfig{
+								IncludeThoughts: true,
+							},
+							SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: SYSTEM_INSTRUCTION}}},
 						},
-					)
-					if err != nil {
-						log.Println("Error generating content", err)
-						contents[m.ChannelID] = []*genai.Content{}
-						s.ChannelMessageSend(m.ChannelID, err.Error())
-					} else {
-						contents[m.ChannelID] = append(contents[m.ChannelID], result.Candidates[0].Content)[max(0, len(contents[m.ChannelID]) - MAX_CONTENTS + 1):]
-						var responseString string
-						for _, part := range result.Candidates[0].Content.Parts {
-							responseString += part.Text
+					) {
+						if err != nil {
+							log.Println("Error generating content", err)
+							s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Errored\n%s", err.Error()))
+							return
 						}
-						for i := 0; i < len(responseString); i += 2000 {
-							if i + 2000 > len(responseString) {
-								s.ChannelMessageSend(m.ChannelID, responseString[i:])
-							} else {
-								s.ChannelMessageSend(m.ChannelID, responseString[i:i + 2000])
-							}
+						responseString, err := result.Text()
+						if err != nil {
+							log.Println("Error converting response to string", err)
+							s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Errored\n%s", err.Error()))
+							return
 						}
+						completeResponse += responseString
+						go s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Thinking\n%s", completeResponse))
 					}
+					contents[m.ChannelID] = append(contents[m.ChannelID], result.Candidates[0].Content)[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
+					s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Thought for %.1f seconds\n%s", time.Since(startTime).Seconds(), completeResponse))
 					break
 				}
 			}
