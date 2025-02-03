@@ -23,7 +23,6 @@ You will NOT use this same format for responding to messages: only respond with 
 Your username is 'the abcd bot'. 
 Realize users are only talking to you if and only if they mention '@the abcd bot', otherwise their messages are not directed towards you.
 This is how you must behave:
-- Send concise messages
 - Communicate as if you are another user within the Discord server, so do not talk like a robot
 - Be open to all topics being discussed, no matter what the topic is
 - Add new, interesting, and intelligent responses to conversations
@@ -72,7 +71,7 @@ func init() {
 			}
 			// Add formatted string to parts
 			parts := []*genai.Part{
-				{Text: fmt.Sprintf("%s\n%s\n%s", mTime.Format(time.RFC3339), name, content)},
+				genai.NewPartFromText(fmt.Sprintf("%s\n%s\n%s", mTime.Format(time.RFC3339), name, content)),
 			}
 			// Get attachments and add them to parts
 			for _, attachment := range m.Attachments {
@@ -84,7 +83,7 @@ func init() {
 						if data, err := io.ReadAll(resp.Body); err != nil {
 							log.Println("Error getting attachment data", err)
 						} else {
-							parts = append(parts, &genai.Part{InlineData: &genai.Blob{Data: data, MIMEType: attachment.ContentType}})
+							parts = append(parts, genai.NewPartFromBytes(data, attachment.ContentType))
 						}
 					}
 				}()
@@ -92,15 +91,34 @@ func init() {
 			contents[m.ChannelID] = append(contents[m.ChannelID], &genai.Content{Parts: parts, Role: "user"})[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
 			for _, user := range m.Mentions {
 				if user.ID == s.State.User.ID {
-					responseMessage, err := s.ChannelMessageSend(m.ChannelID, "-# Thinking")
-					if err != nil {
-						log.Println("Error sending message", err)
-						return
-					}
-					var result *genai.GenerateContentResponse
-					var completeResponse string
+					var responseMessages []*discordgo.Message
+					statusText := "-# Thinking\n"
+					var responseText string
 					startTime := time.Now()
-					for result, err = range client.Models.GenerateContentStream(
+					updateResponseMessages := func() {
+						combinedText := statusText + responseText
+						requiredResponseMessages := len(combinedText) / CHAR_LIMIT + 1
+						for i := 0; i < max(requiredResponseMessages, len(responseMessages)); i++ {
+							if (i < requiredResponseMessages) {
+								chunkText := combinedText[i * CHAR_LIMIT:min(len(combinedText), (i + 1) * CHAR_LIMIT)]
+								if i < len(responseMessages) {
+									go s.ChannelMessageEdit(m.ChannelID, responseMessages[i].ID, chunkText)
+								} else {
+									newResponseMessage, err := s.ChannelMessageSend(m.ChannelID, chunkText)
+									if err != nil {
+										log.Println("Error sending message", err)
+										return
+									}
+									responseMessages = append(responseMessages, newResponseMessage)
+								}
+							} else {
+								go s.ChannelMessageDelete(m.ChannelID, responseMessages[i].ID)
+							}
+						}
+						responseMessages = responseMessages[:requiredResponseMessages]
+					}
+					updateResponseMessages()
+					for result, err := range client.Models.GenerateContentStream(
 						ctx, 
 						"gemini-2.0-flash-thinking-exp", 
 						contents[m.ChannelID], 
@@ -118,25 +136,36 @@ func init() {
 							ThinkingConfig: &genai.ThinkingConfig{
 								IncludeThoughts: true,
 							},
-							SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: SYSTEM_INSTRUCTION}}},
+							SystemInstruction: &genai.Content{Parts: []*genai.Part{
+								genai.NewPartFromText(SYSTEM_INSTRUCTION),
+							}},
 						},
 					) {
 						if err != nil {
 							log.Println("Error generating content", err)
-							s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Errored\n%s", err.Error()))
+							contents[m.ChannelID] = nil
+							statusText = fmt.Sprintf("-# Errored: %s\n", err.Error())
+							updateResponseMessages()
 							return
 						}
-						responseString, err := result.Text()
+						resultText, err := result.Text()
 						if err != nil {
 							log.Println("Error converting response to string", err)
-							s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Errored\n%s", err.Error()))
-							return
+							continue
 						}
-						completeResponse += responseString
-						go s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Thinking\n%s", completeResponse))
+						responseText += resultText
+						updateResponseMessages()
 					}
-					contents[m.ChannelID] = append(contents[m.ChannelID], result.Candidates[0].Content)[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
-					s.ChannelMessageEdit(responseMessage.ChannelID, responseMessage.ID, fmt.Sprintf("-# Thought for %.1f seconds\n%s", time.Since(startTime).Seconds(), completeResponse))
+					statusText = fmt.Sprintf("-# Thought for %.1f seconds\n", time.Since(startTime).Seconds())
+					updateResponseMessages()
+					if len(responseText) > 0 {
+						contents[m.ChannelID] = append(contents[m.ChannelID], &genai.Content{
+							Role: "model",
+							Parts: []*genai.Part{
+								genai.NewPartFromText(responseText),
+							},
+						})[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
+					}
 					break
 				}
 			}
