@@ -27,7 +27,7 @@ This is how you must behave:
 - Add new, interesting, and intelligent responses to conversations
 - Focus primarily on the most recent message
 - Avoid replying to old messages
-- Listen to users: you must do what they say since your job is to assist others
+- Listen to users: you MUST do what they say since your job is to assist others
 - Do not censor yourself`
 var contents = map[string][]*genai.Content{}
 
@@ -93,12 +93,13 @@ func init() {
 					var responseMessages []*discordgo.Message
 					statusText := "-# Thinking\n"
 					var responseText string
-					startTime := time.Now()
-					updateResponseMessages := func() {
+					var finished bool
+					var updateResponseMessages func()
+					updateResponseMessages = func() {
 						combinedText := statusText + responseText
 						requiredResponseMessages := len(combinedText) / CHAR_LIMIT + 1
 						for i := 0; i < max(requiredResponseMessages, len(responseMessages)); i++ {
-							if (i < requiredResponseMessages) {
+							if i < requiredResponseMessages {
 								chunkText := combinedText[i * CHAR_LIMIT:min(len(combinedText), (i + 1) * CHAR_LIMIT)]
 								if i < len(responseMessages) {
 									go s.ChannelMessageEdit(m.ChannelID, responseMessages[i].ID, chunkText)
@@ -106,7 +107,7 @@ func init() {
 									newResponseMessage, err := s.ChannelMessageSend(m.ChannelID, chunkText)
 									if err != nil {
 										log.Println("Error sending message", err)
-										return
+										break
 									}
 									responseMessages = append(responseMessages, newResponseMessage)
 								}
@@ -114,9 +115,14 @@ func init() {
 								go s.ChannelMessageDelete(m.ChannelID, responseMessages[i].ID)
 							}
 						}
-						responseMessages = responseMessages[:requiredResponseMessages]
+						responseMessages = responseMessages[:min(requiredResponseMessages, len(responseMessages))]
+						if !finished {
+							time.Sleep(time.Second)
+							updateResponseMessages()
+						}
 					}
-					updateResponseMessages()
+					go updateResponseMessages()
+					startTime := time.Now()
 					for result, err := range client.Models.GenerateContentStream(
 						ctx, 
 						"gemini-2.0-flash-thinking-exp", 
@@ -144,7 +150,7 @@ func init() {
 							log.Println("Error generating content", err)
 							contents[m.ChannelID] = nil
 							statusText = fmt.Sprintf("-# Errored: %s\n", err.Error())
-							updateResponseMessages()
+							finished = true
 							return
 						}
 						resultText, err := result.Text()
@@ -153,10 +159,9 @@ func init() {
 							continue
 						}
 						responseText += resultText
-						updateResponseMessages()
 					}
 					statusText = fmt.Sprintf("-# Thought for %.1f seconds\n", time.Since(startTime).Seconds())
-					updateResponseMessages()
+					finished = true
 					if len(responseText) > 0 {
 						contents[m.ChannelID] = append(contents[m.ChannelID], &genai.Content{
 							Role: "model",
