@@ -167,8 +167,6 @@ google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9Ywl
 google.golang.org/appengine v1.4.0/go.mod h1:xpcJRLb0r/rnEns0DIKYYv+WjYCduHsrkT7/EB5XEv4=
 google.golang.org/appengine/v2 v2.0.2 h1:MSqyWy2shDLwG7chbwBJ5uMyw6SNqJzhJHNDwYB0Akk=
 google.golang.org/appengine/v2 v2.0.2/go.mod h1:PkgRUWz4o1XOvbqtWTkBtCitEJ5Tp4HoVEdMMYQR/8E=
-google.golang.org/genai v0.0.1 h1:TnSucqFPittt8lFQV0Y6+8z+yetUz3ObOO0mR+wjSM0=
-google.golang.org/genai v0.0.1/go.mod h1:yPyKKBezIg2rqZziLhHQ5CD62HWr7sLDLc2PDzdrNVs=
 google.golang.org/genai v0.1.0 h1:hAwvRGt7Nd79ZwrwYYJ2FSxeF4Cu/zTcNjA0tIIf0Ws=
 google.golang.org/genai v0.1.0/go.mod h1:yPyKKBezIg2rqZziLhHQ5CD62HWr7sLDLc2PDzdrNVs=
 google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8/go.mod h1:JiN7NxoALGmiZfu7CAH4rXhgtRTLTxftemlI0sWmxmc=
@@ -204,3 +202,5 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
+mccoy.space/g/ogg v0.0.0-20221103053400-1ea94e6f3152 h1:p3Sx79jj5P979gSyMOoSftOXFPuGquvCZMzbOeV+8oE=
+mccoy.space/g/ogg v0.0.0-20221103053400-1ea94e6f3152/go.mod h1:Fa7PeLv7azi4nCJLxrQ2SK7pqOEvqgt9deL4K/XZCA8=
