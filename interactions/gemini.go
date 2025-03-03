@@ -10,8 +10,10 @@ import (
 	"io"
 	"fmt"
 	"os"
+	"bytes"
 )
 
+var NUMBER_OF_IMAGES = int64(1)
 const MAX_CONTENTS = 50
 const CHAR_LIMIT = 2000
 const SYSTEM_INSTRUCTION = `You are a chatbot inside a Discord text channel. 
@@ -37,12 +39,104 @@ func init() {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: os.Getenv("GEMINI_API_KEY"),
 		Backend: genai.BackendGeminiAPI,
-		HTTPOptions: genai.HTTPOptions{
-			APIVersion: "v1alpha",
-		},
 	})
 	if err != nil {
 		log.Fatalln("Failed to create genai client", err)
+	}
+	Commands = append(Commands, &discordgo.ApplicationCommand{
+		Name:        "imagen",
+		Description: "Generate an image with Imagen 3",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type: discordgo.ApplicationCommandOptionString,
+				Name: "prompt",
+				Description: "Prompt used for generated image",
+				Required: true,	
+			},
+			{
+				Type: discordgo.ApplicationCommandOptionString,
+				Name: "aspect_ratio",
+				Description: "Aspect ratio used for generated image",
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{
+						Name: "1:1",
+						Value: "1:1",
+					},
+					{
+						Name: "9:16",
+						Value: "9:16",
+					},
+					{
+						Name: "16:9",
+						Value: "16:9",
+					},
+					{
+						Name: "3:4",
+						Value: "3:4",
+					},
+					{
+						Name: "4:3",
+						Value: "4:3",
+					},
+				},
+			},
+		},
+	})
+	CommandHandlers["imagen"] = func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		})
+		config := &genai.GenerateImagesConfig{
+			NumberOfImages: &NUMBER_OF_IMAGES,
+		}
+		options := i.ApplicationCommandData().Options
+		optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption, len(options))
+		for _, opt := range options {
+			optionMap[opt.Name] = opt
+		}
+		prompt := optionMap["prompt"].StringValue()
+		if option, ok := optionMap["aspect_ratio"]; ok {
+			config.AspectRatio = option.StringValue()
+		}
+		startTime := time.Now()
+		res, err := client.Models.GenerateImages(ctx, "imagen-3.0-generate-002", prompt, config)
+		if err != nil {
+			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{
+					{
+						Title: prompt[:min(len(prompt), 256)],
+						Color: 0xff0000,
+						Description: err.Error(),
+					},
+				},
+			})
+			return
+		} else if len(res.GeneratedImages) == 0 {
+			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{
+					{
+						Title: prompt[:min(len(prompt), 256)],
+						Color: 0xff0000,
+						Description: "Image generation failed",
+					},
+				},
+			})
+			return
+		}
+		s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
+			Content: fmt.Sprintf(
+				"-# Generated in %0.1f seconds\n`%s`", 
+				time.Since(startTime).Seconds(),
+				prompt[:min(len(prompt), 1950)],
+			),
+			Files: []*discordgo.File{
+				{
+					Name: "image.png",
+					ContentType: res.GeneratedImages[0].Image.MIMEType,
+					Reader: bytes.NewReader(res.GeneratedImages[0].Image.ImageBytes),
+				},
+			},
+		})
 	}
 	MessageCreateHandlers = append(MessageCreateHandlers, func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if !m.Author.Bot && (len(m.Content) > 0 || len(m.Attachments) > 0) {
@@ -88,49 +182,23 @@ func init() {
 					}
 				}()
 			}
-			contents[m.ChannelID] = append(contents[m.ChannelID], &genai.Content{Parts: parts, Role: "user"})[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
+			
+			contents[m.ChannelID] = append(contents[m.ChannelID], genai.NewUserContentFromParts(parts))[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
 			for _, user := range m.Mentions {
 				if user.ID == s.State.User.ID {
-					var responseMessages []*discordgo.Message
-					statusText := "-# Thinking\n"
-					var responseText string
-					var finished bool
-					var updateResponseMessages func()
-					updateResponseMessages = func() {
-						combinedText := statusText + responseText
-						requiredResponseMessages := len(combinedText) / CHAR_LIMIT + 1
-						for i := 0; i < max(requiredResponseMessages, len(responseMessages)); i++ {
-							if i < requiredResponseMessages {
-								chunkText := combinedText[i * CHAR_LIMIT:min(len(combinedText), (i + 1) * CHAR_LIMIT)]
-								if i < len(responseMessages) {
-									go s.ChannelMessageEdit(m.ChannelID, responseMessages[i].ID, chunkText)
-								} else {
-									newResponseMessage, err := s.ChannelMessageSend(m.ChannelID, chunkText)
-									if err != nil {
-										log.Println("Error sending message", err)
-										break
-									}
-									responseMessages = append(responseMessages, newResponseMessage)
-								}
-							} else {
-								go s.ChannelMessageDelete(m.ChannelID, responseMessages[i].ID)
-							}
-						}
-						responseMessages = responseMessages[:min(requiredResponseMessages, len(responseMessages))]
-						if !finished {
-							time.Sleep(time.Second)
-							updateResponseMessages()
-						}
+					firstResponseMessage, err := s.ChannelMessageSend(m.ChannelID, "-# Thinking")
+					if err != nil {
+						log.Println("Error sending message")
+						return
 					}
-					go updateResponseMessages()
 					startTime := time.Now()
-					for result, err := range client.Models.GenerateContentStream(
-						ctx, 
-						"gemini-2.0-flash-thinking-exp", 
+					res, err := client.Models.GenerateContent(
+						ctx,
+						"gemini-2.0-flash", 
 						contents[m.ChannelID], 
 						&genai.GenerateContentConfig{
 							Tools: []*genai.Tool{
-								{CodeExecution: &genai.ToolCodeExecution{}},
+								{GoogleSearch: &genai.GoogleSearch{}},
 							},
 							SafetySettings: []*genai.SafetySetting{
 								{Category: genai.HarmCategoryHateSpeech, Threshold: genai.HarmBlockThresholdBlockNone},
@@ -139,38 +207,26 @@ func init() {
 								{Category: genai.HarmCategorySexuallyExplicit, Threshold: genai.HarmBlockThresholdBlockNone},
 								{Category: genai.HarmCategoryCivicIntegrity, Threshold: genai.HarmBlockThresholdBlockNone},
 							},
-							ThinkingConfig: &genai.ThinkingConfig{
-								IncludeThoughts: true,
-							},
-							SystemInstruction: &genai.Content{Parts: []*genai.Part{
-								genai.NewPartFromText(SYSTEM_INSTRUCTION),
-							}},
+							SystemInstruction: genai.NewUserContentFromText(SYSTEM_INSTRUCTION),
 						},
-					) {
-						if err != nil {
-							log.Println("Error generating content", err)
-							contents[m.ChannelID] = nil
-							statusText = fmt.Sprintf("-# Errored: %s\n", err.Error())
-							finished = true
-							return
-						}
-						resultText, err := result.Text()
-						if err != nil {
-							log.Println("Error converting response to string", err)
-							continue
-						}
-						responseText += resultText
+					)
+					if err != nil {
+						log.Println("Error generating content", err)
+						contents[m.ChannelID] = nil
+						s.ChannelMessageEdit(m.ChannelID, firstResponseMessage.ID, fmt.Sprintf("-# Errored: %s", err.Error()))
+						return
 					}
-					statusText = fmt.Sprintf("-# Thought for %.1f seconds\n", time.Since(startTime).Seconds())
-					finished = true
-					if len(responseText) > 0 {
-						contents[m.ChannelID] = append(contents[m.ChannelID], &genai.Content{
-							Role: "model",
-							Parts: []*genai.Part{
-								genai.NewPartFromText(responseText),
-							},
-						})[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
+					resText, err := res.Text()
+					if err != nil {
+						log.Println("Error converting response to string", err)
+						continue
 					}
+					combinedText :=  fmt.Sprintf("-# Thought for %.1f seconds\n%s", time.Since(startTime).Seconds(), resText)
+					go s.ChannelMessageEdit(m.ChannelID, firstResponseMessage.ID, combinedText[:min(len(combinedText), 2000)])
+					for i := range len(resText) / 2000 {
+						go s.ChannelMessageSend(m.ChannelID, combinedText[2000 * (i + 1):min(len(combinedText), 2000 * (i + 2))])
+					}
+					contents[m.ChannelID] = append(contents[m.ChannelID], genai.NewModelContentFromText(resText))[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
 					break
 				}
 			}
