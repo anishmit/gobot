@@ -194,11 +194,11 @@ func init() {
 					startTime := time.Now()
 					res, err := client.Models.GenerateContent(
 						ctx,
-						"gemini-2.0-flash", 
+						"gemini-2.0-flash-thinking-exp", 
 						contents[m.ChannelID], 
 						&genai.GenerateContentConfig{
 							Tools: []*genai.Tool{
-								{GoogleSearch: &genai.GoogleSearch{}},
+								{CodeExecution: &genai.ToolCodeExecution{}},
 							},
 							SafetySettings: []*genai.SafetySetting{
 								{Category: genai.HarmCategoryHateSpeech, Threshold: genai.HarmBlockThresholdBlockNone},
