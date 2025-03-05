@@ -226,7 +226,9 @@ func init() {
 					for i := range len(resText) / 2000 {
 						go s.ChannelMessageSend(m.ChannelID, combinedText[2000 * (i + 1):min(len(combinedText), 2000 * (i + 2))])
 					}
-					contents[m.ChannelID] = append(contents[m.ChannelID], genai.NewModelContentFromText(resText))[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
+					if len(resText) > 0 {
+						contents[m.ChannelID] = append(contents[m.ChannelID], genai.NewModelContentFromText(resText))[max(0, len(contents[m.ChannelID]) + 1 - MAX_CONTENTS):]
+					}
 					break
 				}
 			}
