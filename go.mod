@@ -7,7 +7,7 @@ require (
 	github.com/bwmarrin/discordgo v0.28.1
 	github.com/joho/godotenv v1.5.1
 	google.golang.org/api v0.218.0
-	google.golang.org/genai v0.4.0
+	google.golang.org/genai v0.5.0
 	mccoy.space/g/ogg v0.0.0-20221103053400-1ea94e6f3152
 )
 

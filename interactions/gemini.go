@@ -13,7 +13,7 @@ import (
 	"bytes"
 )
 
-var NUMBER_OF_IMAGES = int64(1)
+var NUMBER_OF_IMAGES = int32(1)
 const MAX_CONTENTS = 50
 const CHAR_LIMIT = 2000
 const SYSTEM_INSTRUCTION = `You are a chatbot inside a Discord text channel. 
@@ -194,11 +194,11 @@ func init() {
 					startTime := time.Now()
 					res, err := client.Models.GenerateContent(
 						ctx,
-						"gemini-2.0-flash-thinking-exp", 
+						"gemini-2.0-pro-exp", 
 						contents[m.ChannelID], 
 						&genai.GenerateContentConfig{
 							Tools: []*genai.Tool{
-								{CodeExecution: &genai.ToolCodeExecution{}},
+								{GoogleSearch: &genai.GoogleSearch{}},
 							},
 							SafetySettings: []*genai.SafetySetting{
 								{Category: genai.HarmCategoryHateSpeech, Threshold: genai.HarmBlockThresholdBlockNone},
