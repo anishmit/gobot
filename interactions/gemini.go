@@ -86,16 +86,28 @@ func init() {
 		Description: "Generate content with Gemini Flash",
 		Options: []*discordgo.ApplicationCommandOption{
 			{
-				Type: discordgo.ApplicationCommandOptionString,
-				Name: "prompt",
-				Description: "Prompt",
-				Required: false,
+				Type: discordgo.ApplicationCommandOptionSubCommand,
+				Name: "send",
+				Description: "Send content to Gemini Flash",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type: discordgo.ApplicationCommandOptionString,
+						Name: "prompt",
+						Description: "Prompt",
+						Required: false,
+					},
+					{
+						Type: discordgo.ApplicationCommandOptionAttachment,
+						Name: "attachment",
+						Description: "Attachment",
+						Required: false,
+					},
+				},
 			},
 			{
-				Type: discordgo.ApplicationCommandOptionAttachment,
-				Name: "attachment",
-				Description: "Attachment",
-				Required: false,
+				Type: discordgo.ApplicationCommandOptionSubCommand,
+				Name: "clear",
+				Description: "Clear Gemini Flash content history",
 			},
 		},
 	})
@@ -103,15 +115,15 @@ func init() {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		})
-		config := &genai.GenerateImagesConfig{
-			NumberOfImages: 1,
-		}
 		options := i.ApplicationCommandData().Options
 		optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption, len(options))
 		for _, opt := range options {
 			optionMap[opt.Name] = opt
 		}
 		prompt := optionMap["prompt"].StringValue()
+		config := &genai.GenerateImagesConfig{
+			NumberOfImages: 1,
+		}
 		if option, ok := optionMap["aspect_ratio"]; ok {
 			config.AspectRatio = option.StringValue()
 		}
@@ -156,10 +168,22 @@ func init() {
 		})
 	}
 	CommandHandlers["flash"] =  func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		commandData := i.ApplicationCommandData()
+		if commandData.Options[0].Name == "clear" {
+			flashContents[i.ChannelID]  = nil
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Cleared Gemini Flash history",
+				},
+			})
+			return
+		}
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		})
-		options := i.ApplicationCommandData().Options
+		subCommandData := i.ApplicationCommandData().Options[0]
+		options := subCommandData.Options
 		if len(options) == 0 {
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 				Content: "You must include a prompt or an attachment.",
@@ -170,12 +194,18 @@ func init() {
 		for _, opt := range options {
 			optionMap[opt.Name] = opt
 		}
+		responseEmbed := &discordgo.MessageEmbed{}
 		var parts []*genai.Part
 		if option, ok := optionMap["prompt"]; ok {
-			parts = append(parts, genai.NewPartFromText(option.StringValue()))
+			prompt := option.StringValue()
+			parts = append(parts, genai.NewPartFromText(prompt))
+			responseEmbed.Title = prompt[:min(len(prompt), 256)]
 		}
 		if option, ok := optionMap["attachment"]; ok {
-			attachment := i.ApplicationCommandData().Resolved.Attachments[option.Value.(string)]
+			attachment := commandData.Resolved.Attachments[option.Value.(string)]
+			responseEmbed.Thumbnail = &discordgo.MessageEmbedThumbnail{
+				URL: attachment.URL,
+			}
 			func() {
 				if resp, err := http.Get(attachment.URL); err != nil {
 					log.Println("Error getting attachment", err)
@@ -190,6 +220,7 @@ func init() {
 			}() 
 		}
 		flashContents[i.ChannelID] = append(flashContents[i.ChannelID], genai.NewUserContentFromParts(parts))[max(0, len(flashContents[i.ChannelID]) + 1 - MAX_CONTENTS):]
+		startTime := time.Now()
 		res, err := client.Models.GenerateContent(
 			ctx,
 			"gemini-2.0-flash-exp", 
@@ -205,15 +236,65 @@ func init() {
 				ResponseModalities: []string{"Text", "Image"},
 			},
 		)
+		generationTime := time.Since(startTime).Seconds()
 		if err != nil {
+			flashContents[i.ChannelID]  = nil
+			responseEmbed.Color = 0xff0000
+			responseEmbed.Description = err.Error()
+			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{responseEmbed},
+			})
+			return
+		} else if len(res.Candidates) == 0 {
+			flashContents[i.ChannelID]  = nil
+			responseEmbed.Color = 0xff0000
+			responseEmbed.Description = "No candidates were generated"
+			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{responseEmbed},
+			})
+			return
+		} else if res.Candidates[0].Content == nil {
+			flashContents[i.ChannelID]  = nil
+			responseEmbed.Color = 0xff0000
+			responseEmbed.Description = "Content is nil"
+			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{responseEmbed},
+			})
 			return
 		}
 		flashContents[i.ChannelID] = append(flashContents[i.ChannelID], res.Candidates[0].Content)[max(0, len(flashContents[i.ChannelID]) + 1 - MAX_CONTENTS):]
-		resText := res.Text()
-		s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
-			Content: resText[:min(2000, len(resText))],
-		})
-
+		resText := ""
+		var attachments []*discordgo.File
+		for _, part := range res.Candidates[0].Content.Parts {
+			if part.Text != "" {
+				resText += part.Text
+			} else {
+				attachments = append(attachments, &discordgo.File{
+					Name: "image.png",
+					ContentType: part.InlineData.MIMEType,
+					Reader: bytes.NewReader(part.InlineData.Data),
+				})
+			}
+		}
+		numFollowUpMessages := len(resText) / 4096 + 1
+		for j := range numFollowUpMessages {
+			embed := &discordgo.MessageEmbed{}
+			if j == 0 {
+				embed = responseEmbed
+			}
+			embed.Color = 0x6c3baa
+			embed.Description = resText[j * 4096:min((j + 1) * 4096, len(resText))]
+			webhookParams := &discordgo.WebhookParams{
+				Embeds: []*discordgo.MessageEmbed{embed},
+			}
+			if j == numFollowUpMessages - 1 {
+				embed.Footer = &discordgo.MessageEmbedFooter{
+					Text: fmt.Sprintf("Thought for %.1f seconds", generationTime),
+				}
+				webhookParams.Files = attachments
+			}
+			s.FollowupMessageCreate(i.Interaction, false, webhookParams)
+		}
 	}
 	MessageCreateHandlers = append(MessageCreateHandlers, func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if !m.Author.Bot && (len(m.Content) > 0 || len(m.Attachments) > 0) {
@@ -262,7 +343,7 @@ func init() {
 			// Add content to array
 			proContents[m.ChannelID] = append(proContents[m.ChannelID], genai.NewUserContentFromParts(parts))[max(0, len(proContents[m.ChannelID]) + 1 - MAX_CONTENTS):]
 			for _, user := range m.Mentions {
-				// User mentioned the bot, so a reply is needed
+				// User mentioned the bot
 				if user.ID == s.State.User.ID {
 					firstResponseMessage, err := s.ChannelMessageSend(m.ChannelID, "-# Thinking")
 					if err != nil {
@@ -297,7 +378,7 @@ func init() {
 					combinedText :=  fmt.Sprintf("-# Thought for %.1f seconds\n%s", time.Since(startTime).Seconds(), res.Text())
 					go s.ChannelMessageEdit(m.ChannelID, firstResponseMessage.ID, combinedText[:min(len(combinedText), 2000)])
 					for i := range len(combinedText) / 2000 {
-						s.ChannelMessageSend(m.ChannelID, combinedText[2000 * (i + 1):min(len(combinedText), 2000 * (i + 2))])
+						go s.ChannelMessageSend(m.ChannelID, combinedText[2000 * (i + 1):min(len(combinedText), 2000 * (i + 2))])
 					}
 					proContents[m.ChannelID] = append(proContents[m.ChannelID], res.Candidates[0].Content)[max(0, len(proContents[m.ChannelID]) + 1 - MAX_CONTENTS):]
 					break
