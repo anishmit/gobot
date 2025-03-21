@@ -353,7 +353,7 @@ func init() {
 					startTime := time.Now()
 					res, err := client.Models.GenerateContent(
 						ctx,
-						"gemini-2.0-pro-exp", 
+						"gemini-2.0-flash", 
 						proContents[m.ChannelID], 
 						&genai.GenerateContentConfig{
 							Tools: []*genai.Tool{
