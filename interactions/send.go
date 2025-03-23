@@ -53,6 +53,7 @@ func init() {
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
 				Content: "Scheduled message send.",
+				Flags: discordgo.MessageFlagsEphemeral,
 			},
 		})
 		time.Sleep(time.Duration(sendTime * 1_000_000 - time.Now().UnixNano()))
