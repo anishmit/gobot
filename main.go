@@ -21,8 +21,14 @@ func init() {
 
 func main() {
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if h, ok := interactions.CommandHandlers[i.ApplicationCommandData().Name]; ok {
-			h(s, i)
+		if i.Type == discordgo.InteractionApplicationCommand {
+			if h, ok := interactions.CommandHandlers[i.ApplicationCommandData().Name]; ok {
+				h(s, i)
+			}
+		} else if i.Type == discordgo.InteractionMessageComponent {
+			if h, ok := interactions.ComponentHandlers[i.MessageComponentData().CustomID]; ok {
+				h(s, i)
+			}
 		}
 	})
 	s.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -42,7 +48,7 @@ func main() {
 		log.Fatalf("Cannot open the session: %v", err)
 	}
 
-	log.Println("Adding commands...")
+	/*log.Println("Adding commands...")
 	registeredCommands := make([]*discordgo.ApplicationCommand, len(interactions.Commands))
 	for i, v := range interactions.Commands {
 		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v)
@@ -50,7 +56,7 @@ func main() {
 			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
 		}
 		registeredCommands[i] = cmd
-	}
+	}*/
 
 	defer s.Close()
 

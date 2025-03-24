@@ -6,9 +6,9 @@ require (
 	firebase.google.com/go/v4 v4.15.1
 	github.com/bwmarrin/discordgo v0.28.1
 	github.com/joho/godotenv v1.5.1
+	github.com/jonas747/ogg v0.0.0-20161220051205-b4f6f4cf3757
 	google.golang.org/api v0.218.0
 	google.golang.org/genai v0.6.0
-	mccoy.space/g/ogg v0.0.0-20221103053400-1ea94e6f3152
 )
 
 require (
