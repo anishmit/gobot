@@ -353,12 +353,9 @@ func init() {
 					startTime := time.Now()
 					res, err := client.Models.GenerateContent(
 						ctx,
-						"gemini-2.0-flash", 
+						"gemini-2.5-pro-exp-03-25", 
 						proContents[m.ChannelID], 
 						&genai.GenerateContentConfig{
-							Tools: []*genai.Tool{
-								{GoogleSearch: &genai.GoogleSearch{}},
-							},
 							SafetySettings: []*genai.SafetySetting{
 								{Category: genai.HarmCategoryHateSpeech, Threshold: genai.HarmBlockThresholdBlockNone},
 								{Category: genai.HarmCategoryDangerousContent, Threshold: genai.HarmBlockThresholdBlockNone},
