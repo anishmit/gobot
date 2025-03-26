@@ -13,6 +13,8 @@ import (
 	"github.com/jonas747/ogg"
 )
 
+const MAX_RESULTS = "25"
+
 type SearchResult struct {
 	Title string
 	ID string
@@ -20,11 +22,12 @@ type SearchResult struct {
 }	
 
 func inVoiceChannel(s *discordgo.Session, guildID, userID string) (bool, string) {
-	voiceState, err := s.State.VoiceState(guildID, userID)
-	if err != nil {
+	// An error means that the user isn't in a VC
+	if voiceState, err := s.State.VoiceState(guildID, userID); err != nil {
 		return false, ""
+	} else {
+		return true, voiceState.ChannelID
 	}
-	return true, voiceState.ChannelID
 }
 
 func search(query string) ([]SearchResult, error) {
@@ -33,9 +36,10 @@ func search(query string) ([]SearchResult, error) {
 		return nil, err
 	}
 	parameters1 := url.Values{}
+	parameters1.Add("key", os.Getenv("YOUTUBE_API_KEY"))
 	parameters1.Add("part", "snippet")
 	parameters1.Add("type", "video")
-	parameters1.Add("key", os.Getenv("YOUTUBE_API_KEY"))
+	parameters1.Add("maxResults", MAX_RESULTS)
 	parameters1.Add("q", query)
 	URL1.RawQuery = parameters1.Encode()
 	res1, err := http.Get(URL1.String())
@@ -52,8 +56,9 @@ func search(query string) ([]SearchResult, error) {
 		return nil, err
 	}
 	parameters2 := url.Values{}
-	parameters2.Add("part", "contentDetails")
 	parameters2.Add("key", os.Getenv("YOUTUBE_API_KEY"))
+	parameters2.Add("part", "contentDetails")
+	parameters2.Add("maxResults", MAX_RESULTS)
 	commaSeparatedIDs := ""
 	for _, item := range items1 {
 		commaSeparatedIDs += item.(map[string]any)["id"].(map[string]any)["videoId"].(string) + ","
@@ -74,7 +79,7 @@ func search(query string) ([]SearchResult, error) {
 		results = append(results, SearchResult{
 			Title: item1.(map[string]any)["snippet"].(map[string]any)["title"].(string),
 			ID: item1.(map[string]any)["id"].(map[string]any)["videoId"].(string),
-			Duration: items2[i].(map[string]any)["contentDetails"].(map[string]any)["duration"].(string),
+			Duration: strings.ToLower(strings.Replace(items2[i].(map[string]any)["contentDetails"].(map[string]any)["duration"].(string)[1:], "T", "", 1)),
 		})
 	}
 	return results, nil
@@ -115,26 +120,25 @@ func init() {
 		searchQuery := i.ApplicationCommandData().Options[0].StringValue()
 		searchResults, err := search(searchQuery)
 		if err != nil {
-			log.Println("Search request failed", err)
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 				Content: "Search request failed.",
 			})
 			return
 		} else if len(searchResults) == 0 {
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
-				Content: fmt.Sprintf("No results found for %s.", searchQuery),
+				Content: fmt.Sprintf("No results found for %s.", searchQuery[:min(1978, len(searchQuery))]),
 			})
 			return
 		}
 		var selectMenuOptions []discordgo.SelectMenuOption 
 		for _, searchResult := range searchResults {
-			modifiedDuration := strings.ToLower(strings.Replace(searchResult.Duration[1:], "T", "", 1))
 			selectMenuOptions = append(selectMenuOptions, discordgo.SelectMenuOption{
-				Label: searchResult.Title,
+				Label: searchResult.Title[:min(100, len(searchResult.Title))],
 				Value: searchResult.ID,
-				Description: modifiedDuration,
+				Description: searchResult.Duration,
 			})
 		}
+		placeholderText := fmt.Sprintf("Results for %s", searchQuery)
 		s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{
@@ -142,7 +146,7 @@ func init() {
 						discordgo.SelectMenu{
 							MenuType: discordgo.StringSelectMenu,
 							CustomID: "ytSelect",
-							Placeholder: fmt.Sprintf("Results for %s", searchQuery),
+							Placeholder: placeholderText[:min(150, len(placeholderText))],
 							MaxValues: len(selectMenuOptions),
 							Options: selectMenuOptions,
 						},
@@ -152,16 +156,22 @@ func init() {
 		})
 	}
 	ComponentHandlers["ytSelect"] = func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseDeferredMessageUpdate,
+		})
+		log.Println(i.Message.ReferencedMessage)
 		videoID := i.MessageComponentData().Values[0]
 		inVC, channelID := inVoiceChannel(s, i.GuildID, i.Member.User.ID)
 		if !inVC {
-			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
-				Content: "You must be in a voice channel to use this command.",
+			content := "You must be in a voice channel to use this command."
+			s.FollowupMessageEdit(i.Interaction, i.Message.ID, &discordgo.WebhookEdit{
+				Content: &content,
 			})
 			return
 		}
-		s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
-			Content: "Playing",
+		content := "Playing"
+		s.FollowupMessageEdit(i.Interaction, i.Message.ID, &discordgo.WebhookEdit{
+			Content: &content,
 		})
 		// UNFINISHED //
 		voice, err := s.ChannelVoiceJoin(i.GuildID, channelID, false, false)
@@ -169,7 +179,7 @@ func init() {
 			log.Println("Could not join voice channel", err)
 			return
 		}
-		cmd1 := exec.Command("venv/bin/yt-dlp", "-4", "-o", "-", "-f", "ba", fmt.Sprintf("https://youtube.com/watch?v=%s", videoID))
+		cmd1 := exec.Command("yt-dlp", "-f", "ba", "-o", "-", fmt.Sprintf("https://youtube.com/watch?v=%s", videoID))
 		cmd2 := exec.Command("ffmpeg", "-i", "-", "-c:a", "libopus", "-b:a", "96K", "-ar", "48000", "-ac", "2", "-f", "opus", "-")
 		cmd2.Stdin, err = cmd1.StdoutPipe()
 		if err != nil {
