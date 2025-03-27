@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"bytes"
+	"strings"
 )
 
 const MAX_CONTENTS = 50
@@ -182,8 +183,7 @@ func init() {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		})
-		subCommandData := i.ApplicationCommandData().Options[0]
-		options := subCommandData.Options
+		options := commandData.Options[0].Options
 		if len(options) == 0 {
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 				Content: "You must include a prompt or an attachment.",
@@ -245,18 +245,10 @@ func init() {
 				Embeds: []*discordgo.MessageEmbed{responseEmbed},
 			})
 			return
-		} else if len(res.Candidates) == 0 {
+		} else if len(res.Candidates) == 0 || res.Candidates[0].Content == nil {
 			flashContents[i.ChannelID]  = nil
 			responseEmbed.Color = 0xff0000
-			responseEmbed.Description = "No candidates were generated"
-			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
-				Embeds: []*discordgo.MessageEmbed{responseEmbed},
-			})
-			return
-		} else if res.Candidates[0].Content == nil {
-			flashContents[i.ChannelID]  = nil
-			responseEmbed.Color = 0xff0000
-			responseEmbed.Description = "Content is nil"
+			responseEmbed.Description = "No response was generated"
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 				Embeds: []*discordgo.MessageEmbed{responseEmbed},
 			})
@@ -278,9 +270,11 @@ func init() {
 		}
 		numFollowUpMessages := len(resText) / 4096 + 1
 		for j := range numFollowUpMessages {
-			embed := &discordgo.MessageEmbed{}
+			var embed *discordgo.MessageEmbed
 			if j == 0 {
 				embed = responseEmbed
+			} else {
+				embed = &discordgo.MessageEmbed{}
 			}
 			embed.Color = 0x6c3baa
 			embed.Description = resText[j * 4096:min((j + 1) * 4096, len(resText))]
@@ -345,7 +339,7 @@ func init() {
 			for _, user := range m.Mentions {
 				// User mentioned the bot
 				if user.ID == s.State.User.ID {
-					firstResponseMessage, err := s.ChannelMessageSend(m.ChannelID, "-# Thinking")
+					responseMessage, err := s.ChannelMessageSend(m.ChannelID, "-# Thinking")
 					if err != nil {
 						log.Println("Error sending message")
 						return
@@ -369,13 +363,28 @@ func init() {
 					if err != nil {
 						log.Println("Error generating content", err)
 						proContents[m.ChannelID] = nil
-						s.ChannelMessageEdit(m.ChannelID, firstResponseMessage.ID, fmt.Sprintf("-# Errored: %s", err.Error()))
+						s.ChannelMessageEdit(m.ChannelID, responseMessage.ID, fmt.Sprintf("-# Errored: %s", err.Error()))
 						return
 					}
-					combinedText :=  fmt.Sprintf("-# Thought for %.1f seconds\n%s", time.Since(startTime).Seconds(), res.Text())
-					go s.ChannelMessageEdit(m.ChannelID, firstResponseMessage.ID, combinedText[:min(len(combinedText), 2000)])
-					for i := range len(combinedText) / 2000 {
-						go s.ChannelMessageSend(m.ChannelID, combinedText[2000 * (i + 1):min(len(combinedText), 2000 * (i + 2))])
+					timeText := fmt.Sprintf("-# Thought for %.1f seconds", time.Since(startTime).Seconds())
+					resText := res.Text()
+					combinedText :=  timeText + "\n" + resText
+					if len(combinedText) <= 2000 {
+						go s.ChannelMessageEdit(m.ChannelID, responseMessage.ID, combinedText)
+					} else {
+						messageEdit := &discordgo.MessageEdit{
+							Content: &timeText,
+							Files: []*discordgo.File{
+								{
+									Name: "response.txt",
+									ContentType: "text/plain",
+									Reader: strings.NewReader(resText),
+								},
+							},
+							ID: responseMessage.ID,
+							Channel: m.ChannelID,
+						}
+						go s.ChannelMessageEditComplex(messageEdit)
 					}
 					proContents[m.ChannelID] = append(proContents[m.ChannelID], res.Candidates[0].Content)[max(0, len(proContents[m.ChannelID]) + 1 - MAX_CONTENTS):]
 					break
