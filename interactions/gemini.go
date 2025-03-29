@@ -36,6 +36,7 @@ var proContents = map[string][]*genai.Content{}
 var flashContents = map[string][]*genai.Content{}
 
 func init() {
+	// Create genai client
 	ctx := context.Background()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: os.Getenv("GEMINI_API_KEY"),
@@ -44,6 +45,8 @@ func init() {
 	if err != nil {
 		log.Fatalln("Failed to create genai client", err)
 	}
+
+	// Create slash commands
 	Commands = append(Commands, &discordgo.ApplicationCommand{
 		Name:        "imagen",
 		Description: "Generate an image with Imagen 3",
@@ -112,10 +115,15 @@ func init() {
 			},
 		},
 	})
+
+	// Imagen slash command handler
 	CommandHandlers["imagen"] = func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		// Defer interaction
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		})
+
+		// Create correct config from options
 		options := i.ApplicationCommandData().Options
 		optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption, len(options))
 		for _, opt := range options {
@@ -124,35 +132,34 @@ func init() {
 		prompt := optionMap["prompt"].StringValue()
 		config := &genai.GenerateImagesConfig{
 			NumberOfImages: 1,
+			PersonGeneration: genai.PersonGenerationAllowAdult,
 		}
 		if option, ok := optionMap["aspect_ratio"]; ok {
 			config.AspectRatio = option.StringValue()
 		}
+
+		// Generate image
 		startTime := time.Now()
 		res, err := client.Models.GenerateImages(ctx, "imagen-3.0-generate-002", prompt, config)
-		if err != nil {
+
+		// Catch errors and respond to interaction with errors
+		if err != nil { // Error occured while generating image
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
-				Embeds: []*discordgo.MessageEmbed{
-					{
-						Title: prompt[:min(len(prompt), 256)],
-						Color: 0xff0000,
-						Description: err.Error(),
-					},
-				},
+				Content: fmt.Sprintf(
+					"`%s`\n%s", 
+					prompt[:min(len(prompt), 1500)],
+					err.Error()[:min(len(err.Error()), 500)],
+				),
 			})
 			return
-		} else if len(res.GeneratedImages) == 0 {
+		} else if len(res.GeneratedImages) == 0 { // No images were generated
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
-				Embeds: []*discordgo.MessageEmbed{
-					{
-						Title: prompt[:min(len(prompt), 256)],
-						Color: 0xff0000,
-						Description: "Image generation failed",
-					},
-				},
+				Content: fmt.Sprintf("`%s`\nNo images were generated.", prompt[:min(len(prompt), 1950)]),
 			})
 			return
 		}
+
+		// Respond to interaction with image
 		s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 			Content: fmt.Sprintf(
 				"-# Generated in %0.1f seconds\n`%s`", 
@@ -168,28 +175,40 @@ func init() {
 			},
 		})
 	}
+
+	// Flash slash command handler
 	CommandHandlers["flash"] =  func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		commandData := i.ApplicationCommandData()
+
+		// Check whether it was the clear subcommand
 		if commandData.Options[0].Name == "clear" {
 			flashContents[i.ChannelID]  = nil
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "Cleared Gemini Flash history",
+					Content: "Cleared chat history",
 				},
 			})
 			return
 		}
+
+		// Defer message
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 		})
+
+		// Get subcommand options
 		options := commandData.Options[0].Options
+
+		// Check to make sure user specified a prompt or an attachment
 		if len(options) == 0 {
 			s.FollowupMessageCreate(i.Interaction, false, &discordgo.WebhookParams{
 				Content: "You must include a prompt or an attachment.",
 			})
 			return
 		}
+
+		
 		optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption, len(options))
 		for _, opt := range options {
 			optionMap[opt.Name] = opt
@@ -290,6 +309,8 @@ func init() {
 			s.FollowupMessageCreate(i.Interaction, false, webhookParams)
 		}
 	}
+
+	// Message create handler
 	MessageCreateHandlers = append(MessageCreateHandlers, func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if !m.Author.Bot && (len(m.Content) > 0 || len(m.Attachments) > 0) {
 			// Get time
