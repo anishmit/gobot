@@ -268,6 +268,7 @@ func init() {
 					resText := ""
 					if len(res.Candidates) != 0 {
 						resText = res.Text()
+						contentHistory[m.ChannelID] = append(contentHistory[m.ChannelID], res.Candidates[0].Content)[max(0, len(contentHistory[m.ChannelID]) + 1 - MAX_CONTENTS):]
 					}
 					combinedText :=  generationTimeText + "\n" + resText
 					if len(combinedText) <= 2000 {
@@ -315,7 +316,6 @@ func init() {
 						}*/
 						go s.ChannelMessageEditComplex(messageEdit)
 					}
-					contentHistory[m.ChannelID] = append(contentHistory[m.ChannelID], res.Candidates[0].Content)[max(0, len(contentHistory[m.ChannelID]) + 1 - MAX_CONTENTS):]
 					break
 				}
 			}
