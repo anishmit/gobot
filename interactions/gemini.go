@@ -266,9 +266,12 @@ func init() {
 					}
 					generationTimeText := fmt.Sprintf("-# %.1fs", generationTime)
 					resText := ""
-					if len(res.Candidates) != 0 {
+					if len(res.Candidates) > 0 {
 						resText = res.Text()
-						contentHistory[m.ChannelID] = append(contentHistory[m.ChannelID], res.Candidates[0].Content)[max(0, len(contentHistory[m.ChannelID]) + 1 - MAX_CONTENTS):]
+						if len(resText) > 0 {
+							contentHistory[m.ChannelID] = append(contentHistory[m.ChannelID], genai.NewModelContentFromText(resText))[max(0, len(contentHistory[m.ChannelID]) + 1 - MAX_CONTENTS):]
+						}
+						
 					}
 					combinedText :=  generationTimeText + "\n" + resText
 					if len(combinedText) <= 2000 {
