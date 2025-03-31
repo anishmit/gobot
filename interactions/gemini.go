@@ -10,16 +10,14 @@ import (
 	"os"
 	"strings"
 	"time"
-
 	"github.com/bwmarrin/discordgo"
-	//"github.com/chromedp/cdproto/page"
-	//"github.com/chromedp/chromedp"
-	//"github.com/yuin/goldmark"
+	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
+	"github.com/yuin/goldmark"
 	"google.golang.org/genai"
 )
 
 const MAX_CONTENTS = 50
-const CHAR_LIMIT = 2000
 const SYSTEM_INSTRUCTION = `You are a chatbot inside a Discord text channel. 
 You will receive messages in the following format:
 <message timestamp>
@@ -41,8 +39,6 @@ var contentHistory = map[string][]*genai.Content{}
 func init() {
 	// Create genai client
 	ctx := context.Background()
-	//ctx, cancel := chromedp.NewContext(context.Background())
-	//defer cancel()
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: os.Getenv("GEMINI_API_KEY"),
 		Backend: genai.BackendGeminiAPI,
@@ -88,35 +84,6 @@ func init() {
 						Value: "4:3",
 					},
 				},
-			},
-		},
-	}, &discordgo.ApplicationCommand{
-		Name: "flash",
-		Description: "Generate content with Gemini Flash",
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type: discordgo.ApplicationCommandOptionSubCommand,
-				Name: "send",
-				Description: "Send content to Gemini Flash",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type: discordgo.ApplicationCommandOptionString,
-						Name: "prompt",
-						Description: "Prompt",
-						Required: false,
-					},
-					{
-						Type: discordgo.ApplicationCommandOptionAttachment,
-						Name: "attachment",
-						Description: "Attachment",
-						Required: false,
-					},
-				},
-			},
-			{
-				Type: discordgo.ApplicationCommandOptionSubCommand,
-				Name: "clear",
-				Description: "Clear Gemini Flash content history",
 			},
 		},
 	})
@@ -275,49 +242,62 @@ func init() {
 					}
 					combinedText :=  generationTimeText + "\n" + resText
 					if len(combinedText) <= 2000 {
-						go s.ChannelMessageEdit(m.ChannelID, responseMessage.ID, combinedText)
+						s.ChannelMessageEdit(m.ChannelID, responseMessage.ID, combinedText)
 					} else {
+						var htmlBuf bytes.Buffer
+						if err := goldmark.Convert([]byte(resText), &htmlBuf); err != nil {
+							log.Println("goldmark errored", err)
+							s.ChannelMessageEdit(m.ChannelID, responseMessage.ID, fmt.Sprintf("-# %s", err.Error()))
+							return
+						}
+						ctx, cancel := chromedp.NewContext(context.Background())
+						defer cancel()
+						var res []byte
+						if err := chromedp.Run(
+							ctx,
+							chromedp.Navigate("about:blank"),
+							chromedp.ActionFunc(func(ctx context.Context) error {
+								frameTree, err := page.GetFrameTree().Do(ctx)
+								if err != nil {
+									return err
+								}
+								return page.SetDocumentContent(frameTree.Frame.ID, fmt.Sprintf(`
+									<!DOCTYPE html>
+									<html>
+										<head>
+											<meta charset="UTF-8">
+											<meta name="viewport" content="width=device-width, initial-scale=1.0">
+										</head>
+										<body>
+											%s
+										</body>
+									</html>
+								`, htmlBuf.String())).Do(ctx)
+							}),
+							chromedp.FullScreenshot(&res, 100),
+						); err != nil {
+							log.Println("chromedp errored", err)
+							s.ChannelMessageEdit(m.ChannelID, responseMessage.ID, fmt.Sprintf("-# %s", err.Error()))
+							return
+						}
 						messageEdit := &discordgo.MessageEdit{
 							Content: &generationTimeText,
 							Files: []*discordgo.File{
 								{
-									Name: "response.txt",
-									ContentType: "text/plain",
+									Name: "response.md",
+									ContentType: "text/markdown",
 									Reader: strings.NewReader(resText),
+								},
+								{
+									Name: "response.png",
+									ContentType: "image/png",
+									Reader: bytes.NewReader(res), 
 								},
 							},
 							ID: responseMessage.ID,
 							Channel: m.ChannelID,
 						}
-						/*var htmlBuf bytes.Buffer
-						if err := goldmark.Convert([]byte(resText), &htmlBuf); err != nil {
-							if err := chromedp.Run(
-								ctx,
-								chromedp.Navigate("about:blank"),
-								chromedp.ActionFunc(func(ctx context.Context) error {
-									frameTree, err := page.GetFrameTree().Do(ctx)
-									if err != nil {
-										return err
-									}
-									return page.SetDocumentContent(frameTree.Frame.ID, fmt.Sprintf(`
-										<!DOCTYPE html>
-										<html>
-											<head>
-												<meta charset="UTF-8">
-												<meta name="viewport" content="width=device-width, initial-scale=1.0">
-											</head>
-											<body>
-												%s
-											</body>
-										</html>
-									`, htmlBuf.String())).Do(ctx)
-								}),
-
-							)
-						} else {
-							fmt.Println(buf.String())
-						}*/
-						go s.ChannelMessageEditComplex(messageEdit)
+						s.ChannelMessageEditComplex(messageEdit)
 					}
 					break
 				}
